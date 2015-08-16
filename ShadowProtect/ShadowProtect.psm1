@@ -35,43 +35,48 @@ Function Get-PathOfSPImage {
 
 Function New-ShadowProtectBackupObject {
     Param(
-        [string]$ImageFile,
-        [string]$SourcedFrom
+        [Parameter(Mandatory=$false)]$EventLogEntry,
+        [Parameter(Mandatory=$false)]$MountData,
+        [Parameter(Mandatory=$false)]$ImageFile,
+        [Parameter(Mandatory=$false)]$UseDate
     )
 
-    $bu = New-Object PSObject
-    $bu | Add-Member -NotePropertyName ImageFile -NotePropertyValue $ImageFile
-    $bu | Add-Member -NotePropertyName SourcedFrom -NotePropertyValue $SourcedFrom
+    $bu = New-Object PSObject -Property @{
+        ImageFile = $ImageFile
+        Date = $Null
+        Completed = $False
+        ComputerName = $Null
 
-    $bu | Add-Member -NotePropertyName IsVerified -NotePropertyValue $False
-    $bu | Add-Member -NotePropertyName IsCopyVerified -NotePropertyValue $False
-    $bu | Add-Member -NotePropertyName Completed -NotePropertyValue $False
-    $bu | Add-Member -NotePropertyName Checksum -NotePropertyValue $False
-    $bu | Add-Member -NotePropertyName IsIncremental -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName StartTime -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName EndTime -NotePropertyValue $_.TimeGenerated
-    $bu | Add-Member -NotePropertyName LogFile -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName Md5File -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName WriteBufferFile -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName WriteBufferLength -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName IncrementalFile -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName MountPointDir -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName GenerateIncrementalOnDismount -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName KeepWriteBufferOnDismount -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName VolumeDevice -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName VolumeNumber -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName ReadOnly -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName SimpleLog -NotePropertyValue @()
-    $bu | Add-Member -NotePropertyName MountTime -NotePropertyValue $Null
-    $bu | Add-Member -MemberType NoteProperty -Name EventLogEntry -Value $_
-    $bu | Add-Member -MemberType NoteProperty -Name PartitionLength -Value "Unknown"
+        IsVerified = $False
+        IsCopyVerified = $False
+        IsIncremental = $Null
+        StartTime = $Null
+        EndTime = $_.TimeGenerated
+        LogFile = $Null
+        Md5File = $Null
+        WriteBufferFile = $Null
+        WriteBufferLength = $Null
+        IncrementalFile = $Null
+        MountPointDir = $Null
+        GenerateIncrementalOnDismount = $Null
+        KeepWriteBufferOnDismount = $Null
+        VolumeDevice = $Null
+        VolumeNumber = $Null
+        ReadOnly = $Null
+        MountTime = $Null
+        EventLogEntry = $EventLogEntry
+        PartitionLength = $Null
+        IsMounted = $False
+        VerifyCopyCount = $Null
+        VerifyCopyErrors = $Null
+        VerifyCopyItems = $Null
+        DriveLetter = $Null
 
-    
-    $bu | Add-Member -NotePropertyName IsMounted -NotePropertyValue $False
-    $bu | Add-Member -NotePropertyName VerifyCopyCount -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName VerifyCopyErrors -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName VerifyCopyItems -NotePropertyValue $Null
-    $bu | Add-Member -NotePropertyName DriveLetter -NotePropertyValue $Null
+        SimpleLog = @()
+    }
+
+    $bu.PSObject.TypeNames.Insert(0,'ShadowProtect.BackupInformation')
+    Update-TypeData -TypeName ShadowProtect.BackupInformation -DefaultDisplayPropertySet ImageFile,Date,Completed -ErrorAction SilentlyContinue
     
     $bu | Add-Member -MemberType ScriptMethod -Name GetLog -Value { Get-Item $this.LogFile }
     $bu | Add-Member -MemberType ScriptMethod -Name LogExists -Value { Test-Path $this.ImageFile }
@@ -79,68 +84,65 @@ Function New-ShadowProtectBackupObject {
     $bu | Add-Member -MemberType ScriptMethod -Name ImageExists -Value { Test-Path $this.ImageFile }
     $bu | Add-Member -MemberType ScriptMethod -Name VerifyImage -Value { $this | Verify-ShadowProtectImage }
     $bu | Add-Member -MemberType ScriptMethod -Name MountImage -Value { $this | Mount-ShadowProtectImage }
-    $bu | Add-Member -MemberType ScriptMethod -Name UnmountImage -Value { $this | Unmount-ShadowProtectImage }
-
-    $defaultProperties = @(‘ImageFile', 'IsCopyVerified', 'IsVerified')
-    $defaultDisplayPropertySet = New-Object System.Management.Automation.PSPropertySet(‘DefaultDisplayPropertySet’,[string[]]$defaultProperties)
-    $PSStandardMembers = [System.Management.Automation.PSMemberInfo[]]@($defaultDisplayPropertySet)
-    $bu | Add-Member MemberSet PSStandardMembers $PSStandardMembers
-    
-
-    $InitFromEventLog = {
-        If($this.EventLogEntry) {
-            foreach($line in $this.EventLogEntry.Message.split("`n")) {
-                if($line -match 'Backup status') { $this.Completed = ( $line -match 'completed') }
-                if($line -match 'Log file') { $this.LogFile = $line.SubString($line.IndexOf(":")+2).Trim() }
-                if($line -match 'Start time') { $this.StartTime = $line.SubString($line.IndexOf(":")+2).Trim() }
-                if($line -match 'Image file') {
-                    $this.ImageFile = $line.SubString($line.IndexOf(":")+2).Trim()
-                    $this.Md5File = $this.ImageFile -replace '.sp[if]$','.md5'
-                    $this.IsIncremental = $line -match '.spf'
-                    If($this.Md5File -And (Test-Path $this.Md5File)) {
-                        $this.Checksum = (Get-Content $this.Md5File ).ToString().Split(" ")[0]
-                    }
-                    else {
-                        $this.Checksum = "Unknown"
-                    }
-                }
-            }
-            $this.SimpleLog += "- Image: $($this.ImageFile)"
-            Return $this
-        }
+    $bu | Add-Member -MemberType ScriptMethod -Name DismountImage -Value { $this | Dismount-ShadowProtectImage }  
+    $bu | Add-Member -MemberType ScriptMethod -Name ParseEventLog -Value {
+        $this.ComputerName = $this.EventLogEntry.MachineName
+        $from_log = $this.EventLogEntry.Message.Split("`n") | Parse-Multiline -DefaultProperties @('Code','StartTime','LogFile','Message','ImageFile','BackupStatus')
+        $this.Completed = $from_log.BackupStatus -match 'complete'
+        $this.LogFile = $from_log.LogFile
+        $this.StartTime = $from_log.StartTime
+        $this.ImageFile = $from_log.ImageFile
+        $this.Date = $this.StartTime
     }
 
-    $InitFromMountRes = {
-        $this.IsIncremental = $this.ImageFile -contains '.spi'
-        If(!$this.EventLogEntry) {
-	        $log = Get-EventLog -LogName "Application" -Source "ShadowProtectSvc" | Where-Object { $_.EventID -eq 1120 -or $_.EventID -eq 1121 -or $_.EventID -eq 1122 -And $_.Message.ToLower().IndexOf($this.ImageFile.ToLower()) -gt 0 }
-            If($log) {
-                $this.EventLogEntry = $log
-            }
-        }
-        Return $this
+    If($bu.EventLogEntry) {
+        $bu.ParseEventLog()
     }
 
-    $bu | Add-Member -MemberType ScriptMethod -Name InitFromEventLog -Value $InitFromEventLog
-    $bu | Add-Member -MemberType ScriptMethod -Name InitFromMountRes -Value $InitFromMountRes
-    
-    Return $bu
+    If($MountData) {
+        $bu.DriveLetter = $MountData.DriveLetter
+    }
+
+    If($UseDate) {
+        $bu.Date = $UseDate
+    }
+
+    If($bu.ImageFile) {
+        If($bu.Complete) {
+            $bu.Md5File = $bu.ImageFile -replace '.sp[if]$','.md5'
+            $bu.IsIncremental = $bu -match '.spf'
+        }
+        $bu.SimpleLog += "- $($bu.ImageFile.split('\')[-1])"
+    }
+
+    Else {
+        Write-Error "Unable to gleen ImageFile from input"
+    }
+
+    Write-Output $bu
 }
 
 Function Get-ShadowProtectBackupHistory {
-	$EndDate = (Get-Date).AddDays(1)
-	$StartDate = (Get-Date).AddMonths(-12)
-	$results = @()
-	
-	$logs = Get-EventLog -LogName "Application" -Source "ShadowProtectSvc" -Before $EndDate -After $StartDate
-    $logs | Where-Object { $_.EventID -eq 1120 -or $_.EventID -eq 1121 -or $_.EventID -eq 1122 } | % {
-        $bu_job = New-ShadowProtectBackupObject
-        $bu_job.EventLogEntry = $_
-        $bu_job.InitFromEventLog() | Out-Null
-        $bu_job.InitFromMountRes() | Out-Null
-        $results += $bu_job
+    Param(
+        [Parameter(Mandatory=$false)][DateTime]$EndDate,
+        [Parameter(Mandatory=$false)][DateTime]$StartDate,
+        [Parameter(Mandatory=$false)][String]$ComputerName,
+        [Parameter(Mandatory=$false)][Switch]$CheckMounted
+    )
+
+    $EventLogParams = @{
+        Source = 'ShadowProtectSvc'
+        LogName = 'Application'
     }
-	Return ( $results | Sort-Object -Property EndTime )
+    
+    If ($EndDate) { $EventLogParams['Before'] = $EndDate }
+    If ($StartDate) { $EventLogParams['After'] = $StartDate }
+    If ($ComputerName) { $EventLogParams['ComputerName'] = $ComputerName }
+	
+    Get-EventLog @EventLogParams| Where-Object { $_.EventID -in 1120..1122 } | Sort-Object -Property TimeGenerated | ForEach-Object {
+        $bu = New-ShadowProtectBackupObject -EventLogEntry $_
+        Write-Output $bu
+    }
 }
 
 Function Mount-ShadowProtectImage {
@@ -186,17 +188,13 @@ Function Mount-ShadowProtectImage {
             Write-Debug "Successfully mounted $($bu.GetImage().Name) to $next_drive"
             $bu.DriveLetter = "$($next_drive):"
             $bu.IsMounted = $True
-            $bu.SimpleLog += "- - $($bu.GetImage().BaseName) mounted" 
-        }
-        Else {
-            $bu.SimpleLog += "- - $($bu.GetImage().BaseName) unable to mount" 
         }
     }
 
     Return $output
 }
 
-Function Unmount-ShadowProtectImage {
+Function Dismount-ShadowProtectImage {
 	$exe = Get-PathOfSPIMount
     ForEach($bu in $input) {
         Write-Debug "Calling $exe d $($bu.DriveLetter)"
@@ -218,11 +216,8 @@ Function Get-ShadowProtectImageFiles {
         [ValidateScript({Test-Path $_})][String]$Path
     )
     $imageFiles = Get-ChildItem -Path $Path -Recurse | Where-Object { $_.Extension -eq '.spf' -Or $_.Extension -eq '.spi' } | Sort-Object -Property LastWriteTime
-    ForEach($imageFile in $imageFiles) {
-        $bu = New-ShadowProtectBackupObject
-        $bu.ImageFile = $imageFile.FullName
-        $bu.SourcedFrom = "FileSystem"
-        Write-Output $bu
+    ForEach($ImageFile in $imageFiles) {
+        New-ShadowProtectBackupObject -ImageFile $ImageFile.FullName -UseDate $ImageFile.LastWriteTime
     }
 }
 
@@ -246,7 +241,6 @@ Function Get-ShadowProtectImageMounts {
         "PartitionLength" = "Partition Length";
         "ImageFile" = "Image File";
         "WriteBufferFile" = "Write Buffer File";
-        "IncrementalFile" = "Incremental File";
         "MountPointDir" = "Mount Point Directory";
         "WriteBufferLength" = "Data Bytes in Write Buffer File";
         "VolumeDevice" = "Volume Device";
@@ -257,42 +251,15 @@ Function Get-ShadowProtectImageMounts {
     
     $current = $Null
     $save = $False
-    foreach($line in $mounts) {
-        If(!$line -And $save) {
-            $current.InitFromMountRes() | Out-Null
-            $current.InitFromEventLog() | Out-Null
-            Write-Output $current
-            $current = $Null
-            $save = $False
-        }
-        If($line) {
-            ForEach($key in $properties.KEYS.GetEnumerator()) {
-                If($current -eq $Null) {
-                    $current = New-ShadowProtectBackupObject
-                }
-                $matchText = "$($properties[$key]): "
-                If($line.IndexOf($matchText) -eq 0) {
-                    $val = ($line -replace $matchText,'').Trim()
-                    If($val -eq "TRUE") { $val = $True }
-                    If($val -eq "FALSE") { $val = $True }
-                    If($key -eq "ImageFile") { $val = $val.split('|')[-1] }
-                    If($val -eq "") { $val = $Null }
-                    If($key -eq "PartitionLength") {
-                        $val -match '(\d+) bytes?' | Out-Null
-                        $val = [long]($matches[1])
-                    }
-                    $current.($key) = $val
-                    $save = $true
-                }
-            }
-        }
+
+    $mounts | Parse-Multiline | ForEach-Object {
+        New-ShadowProtectBackupObject -ImageFile $_.ImageFile.split('|')[-1] -MountData $_
     }
 }
 
-Function Verify-ShadowProtectImage {
+Function Use-VerifyShadowProtectImage {
 	$exe = Get-PathOfSPImage
 
-    $output = @()
     ForEach($bu in $input) {
         Write-Debug ("Verifying against {0}" -f $bu.Md5File)
         $bu.IsVerified = $False
@@ -305,13 +272,11 @@ Function Verify-ShadowProtectImage {
                 $bu.SimpleLog += "- - Verified checksum matches ShadowProtect"
             }
         }
-        $output += $bu
+        Write-Output $bu
     }
-
-    Return $output
 }
 
-Function VerifyCopy-ShadowProtectImage {
+Function Use-VerifyCopyShadowProtectImage {
     Param(
         $MinLength = 1024*512, # 512KiB
         $MaxLength = 1024*1024*50, # 50MiB
@@ -334,6 +299,7 @@ Function VerifyCopy-ShadowProtectImage {
 
         If($bu.IsMounted -ne $False) {
             $prev_loc = Get-Location
+            New-PSDrive -Name $bu.DriveLetter[0] -PSProvider FileSystem -Root "$($bu.DriveLetter)\"
             Set-Location -Path $bu.DriveLetter -ErrorAction Stop
             $parents = Get-ChildItem $bu.DriveLetter -Filter *.* | Where-Object { $_.Name -notmatch '(Windows|PerfLogs)' } | Get-Random -Count $MaxDirs | Select -First $MaxDirs
 
@@ -377,18 +343,52 @@ Function VerifyCopy-ShadowProtectImage {
             }
 
             If($DismountAfter -eq $True) {
-                $bu | Unmount-ShadowProtectImage | Out-Null
+                $bu | Dismount-ShadowProtectImage | Out-Null
             }
         }
 
-        $bu
+        Write-Output $bu
     }
 }
 
-#$res = Get-ShadowProtectBackupHistory | Where-Object { $_.ImageFile -match 'C_VOL' } | Select-Object -last 1 | Verify-ShadowProtectImage | Mount-ShadowProtectImage -Password password | VerifyCopy-ShadowProtectImage
-#$res.SimpleLog -join "`r`n"
-#$history = Get-ShadowProtectBackupHistory
-#Unmount-All-ShadowProtectImages
-#Start-Sleep 3
-#Get-ShadowProtectBackupHistory | Where-Object { $_.ImageFile -match "C_VOL" } | Select-Object -Last 1 | Mount-ShadowProtectImage | VerifyCopy-ShadowProtectImage
-#Unmount-All-ShadowProtectImages
+Function Parse-Multiline {
+    Param(
+        $DefaultProperties = @()
+    )
+
+    $rows = @()
+    $row = $Null
+    $properties = $DefaultProperties
+
+    ForEach($line in $input) {
+        $idx = $line.IndexOf(':')
+        If($idx -gt 0) {
+            $left = (Get-Culture).TextInfo.ToTitleCase($line.SubString(0, $idx)) -replace ' ',''
+            $right = $line.SubString($idx+1).Trim()
+            If($row -eq $Null) { $row = @{} }
+            If($left -notin $properties) { $properties += $left }
+            $row[$left] = $right
+        }
+        ElseIf($row.Keys.Count -gt 0) {
+            $rows += $row
+            $row = $Null
+        }
+    }
+
+    $rows | %{
+        $NewObject = New-Object PSObject
+        ForEach($p in $properties) {
+            $NewObject | Add-Member -NotePropertyName $p -NotePropertyValue $_[$p]
+        }
+
+        Write-Output $NewObject
+    }
+}
+
+Export-ModuleMember -Function Get-ShadowProtectBackupHistory
+Export-ModuleMember -Function Get-ShadowProtectImageFiles
+Export-ModuleMember -Function Get-ShadowProtectImageMounts
+Export-ModuleMember -Function Mount-ShadowProtectImage
+Export-ModuleMember -Function Dismount-ShadowProtectImage
+Export-ModuleMember -Function Use-VerifyShadowProtectImage
+Export-ModuleMember -Function Use-VerifyCopyShadowProtectImage
