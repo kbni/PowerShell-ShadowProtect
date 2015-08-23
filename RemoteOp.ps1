@@ -111,8 +111,6 @@ $Operations = @{
         Import-Module ShadowProtect -Force
         . "$((Get-Module -ListAvailable ShadowProtect).ModuleBase)\Invoke-TokenManipulation.ps1"
 
-        $VerbosePreference = "Continue"
-
         net use * /del /y | out-null
 
         $backups = @()
@@ -182,9 +180,10 @@ $Operations = @{
     }
 }
 
-$DebugPreference = "Continue"
 $ErrorActionPreference = "Stop"
-$VerbosePreference = "Continue"
+If($Verbose) {
+    $VerbosePreference = "Continue"
+}
 
 $UseBlock = $Null
 $sessions = @{}

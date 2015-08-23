@@ -32,7 +32,7 @@ Param(
     $InstallFrom,
 
     [Parameter(Mandatory=$false)]
-    $Credentials
+    $Credential
 )
 
 $DebugPreference = "Continue"
