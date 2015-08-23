@@ -1,4 +1,67 @@
-﻿Param(
+﻿<#
+    .SYNOPSIS
+        Perform multiple operations on multiple servers (and their ShadowProtect backups).
+	
+    .DESCRIPTION
+        Intended to be a one-stop tool for quickly verifying backups are running in the fleet.
+        I'd consider this work-in-progress quality, but it's not likely more work will happen. :)
+
+    .PARAMETER Operation
+        The type of operation you wish to perform, these are limited to:
+            LastBackups -> Returns the last volume backups for each system
+            VerifyLastBackups -> Copy-verifies the last volume backups for each system
+            MountedImages -> Returns the currently mounted backups for each system
+            UnmountImages -> Unmounts all currently mounted backups for each system
+        See also: -ScriptBlock
+
+    .PARAMETER ScriptBlock
+        Pass a PowerShell ScriptBlock to each server. This will let you do pretty much anything
+        you want, even non-ShadowProtect related tasks. Although, if simply running commands
+        against multiple servers is your goal, there are far better scripts out there.
+
+    .PARAMETER Options
+        Each of the Operations above and the ScriptBlock are passed in $Options, which is
+        expected to be a Hashtable. Really only necessary for VerifyLastBackups, where Options
+        should contain the following key/values:
+            ImagePassword = 'ShadowProtectImagePassword'
+            CIFSUsername = 'Additional username to use to connect to the CIFS Share'
+            CIFSPassword = 'Additional password to use to connect to the CIFS Share'
+
+    .PARAMETER ServerList
+        Array of servers to run script against. This can be an array of one.
+        See also: -ComputerName
+
+    .PARAMETER ComputerName
+        Specify a single server to run a script against. Instead of -Serverlist
+
+    .PARAMETER Throttle
+        How many servers should perform their operation at the same time.
+        The default is set to 8. I would restrict this further if all servers were
+        hitting the same backup device (and you intended on reading from that device).
+
+
+    .PARAMETER SimpleLog
+        Some of the functions will append a really basic log entry to the SimpleLog
+        property of each ShadowProtectBackup-Object. If you just want to dump this and
+        don't require further inspection, this is the way to go.
+
+        Currently only recommended for VerifyLastBackups, however.
+
+    .PARAMETER Select
+        Select properties of each ShadowProtectBackup-Object.
+        Pretty much just calls Format-Table $Select
+	
+    .EXAMPLE
+        .\RemoteOp.ps1 -ServerList (Get-Content .\ServerList.txt) -Operation VerifyLastBackups `
+            -Options @{CIFSUsername="KBNI-BNE-NAS2\BackupUser";CIFSPassword="BackupPass";ImagePassword="hunter2"} `
+            -Select ImageFile,ComputerName,IsCopyVerified
+        Verifies the last backups for each server, and outputs whether or not they have been verified by copying files
+
+    .LINK
+        Wiki: http://co.kbni.net/display/PROJ/PowerShell-ShadowProtect
+        Github repo: https://github.com/kbni/PowerShell-ShadowProtect
+#>
+Param(
     [Parameter(Mandatory=$false)]
     [String]
     $Operation,
