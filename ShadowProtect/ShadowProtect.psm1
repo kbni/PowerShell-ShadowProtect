@@ -1,5 +1,51 @@
 $ErrorActionPreference = "Stop"
 
+Function Get-DateRange {
+    Param(
+        [Parameter(Mandatory=$true)][ValidateSet("Year","Month","Day")][String]$Range,
+        [Parameter(Mandatory=$false)]$Year = $Null,
+        [Parameter(Mandatory=$false)]$Month = $Null,
+        [Parameter(Mandatory=$false)]$Day = $Null,
+        [Parameter(Mandatory=$false)][Int]$AddDays = 0,
+        [Parameter(Mandatory=$false)][Int]$AddMonths = 0,
+        [Parameter(Mandatory=$false)][Int]$AddYears = 0,
+        [Parameter(Mandatory=$false)][Switch]$RemoveSecond
+    )
+
+    $today = Get-Date
+    $use_year = $today.Year
+    $use_month = $today.Month
+    $use_day = $today.Day
+
+    If ($Year -ne $Null) { $use_year = $Year }
+    If ($Month -ne $Null) { $use_month = $Month }
+    If ($Day -ne $Null) { $use_day = $Day }
+
+    $nasty_ps = "$use_year-$($use_month.ToString().PadLeft(2, "0"))-$($use_day.ToString().PadLeft(2, "0"))"
+    $base = [DateTime]::ParseExact($nasty_ps, "yyyy-MM-dd", $null)
+
+    $base = $base.AddDays($AddDays)
+    $base = $base.AddMonths($AddMonths)
+    $base = $base.AddMonths($AddYears)
+
+    If($Range -eq "Day") {
+        $other = $base.AddDays(1)
+    }
+
+    If($Range -eq "Month") {
+        $base = $base.AddDays(1-$base.Day)
+        $other = $base.AddMonths(1)
+    }
+
+    If($Range -eq "Year") {
+        $base = $base.AddDays(1-$base.DayOfYear)
+        $other = $base.AddYears(1)
+    }
+
+    If($RemoveSecond) { $other = $other.AddSeconds(-1) }
+    Return @($base, $other)
+}
+
 Function Get-AvailableDriveLetter {
     $driveList = [System.IO.DriveInfo]::getdrives().Name -replace ":.",''
     "HIKLMNOPQRSTUVWXYZ".ToCharArray() | Where-Object { $driveList -notcontains $_ } | Select-Object -Last 1
@@ -35,17 +81,16 @@ Function Get-PathOfSPImage {
 
 Function New-ShadowProtectBackupObject {
     Param(
-        [Parameter(Mandatory=$false)]$EventLogEntry,
-        [Parameter(Mandatory=$false)]$MountData,
-        [Parameter(Mandatory=$false)]$ImageFile,
-        [Parameter(Mandatory=$false)]$UseDate
+        [Parameter(Mandatory=$false)]$EventLogEntry = $Null,
+        [Parameter(Mandatory=$false)]$ImageFile = $Null,
+        [Parameter(Mandatory=$false)]$UseDate = $Null
     )
 
     $bu = New-Object PSObject -Property @{
         ImageFile = $ImageFile
         Date = $Null
         Completed = $False
-        ComputerName = $Null
+        ComputerName = $env:COMPUTERNAME
 
         IsVerified = $False
         IsCopyVerified = $False
@@ -82,13 +127,14 @@ Function New-ShadowProtectBackupObject {
     $bu | Add-Member -MemberType ScriptMethod -Name LogExists -Value { Test-Path $this.ImageFile }
     $bu | Add-Member -MemberType ScriptMethod -Name GetImage -Value { Get-Item $this.ImageFile }
     $bu | Add-Member -MemberType ScriptMethod -Name ImageExists -Value { Test-Path $this.ImageFile }
-    $bu | Add-Member -MemberType ScriptMethod -Name VerifyImage -Value { $this | Verify-ShadowProtectImage }
+    $bu | Add-Member -MemberType ScriptMethod -Name VerifyImage -Value { $this | Use-VerifyShadowProtectImage }
+    $bu | Add-Member -MemberType ScriptMethod -Name VerifyCopy -Value { $this | Use-VerifyCopyShadowProtectImage }
     $bu | Add-Member -MemberType ScriptMethod -Name MountImage -Value { $this | Mount-ShadowProtectImage }
     $bu | Add-Member -MemberType ScriptMethod -Name DismountImage -Value { $this | Dismount-ShadowProtectImage }  
     $bu | Add-Member -MemberType ScriptMethod -Name ParseEventLog -Value {
         $this.ComputerName = $this.EventLogEntry.MachineName
         $from_log = $this.EventLogEntry.Message.Split("`n") | Parse-Multiline -DefaultProperties @('Code','StartTime','LogFile','Message','ImageFile','BackupStatus')
-        $this.Completed = $from_log.BackupStatus -match 'complete'
+        $this.Completed = $from_log.BackupStatus -eq 'completed'
         $this.LogFile = $from_log.LogFile
         $this.StartTime = $from_log.StartTime
         $this.ImageFile = $from_log.ImageFile
@@ -97,10 +143,6 @@ Function New-ShadowProtectBackupObject {
 
     If($bu.EventLogEntry) {
         $bu.ParseEventLog()
-    }
-
-    If($MountData) {
-        $bu.DriveLetter = $MountData.DriveLetter
     }
 
     If($UseDate) {
@@ -127,27 +169,81 @@ Function Get-ShadowProtectBackupHistory {
         [Parameter(Mandatory=$false)][DateTime]$EndDate,
         [Parameter(Mandatory=$false)][DateTime]$StartDate,
         [Parameter(Mandatory=$false)][String]$ComputerName,
-        [Parameter(Mandatory=$false)][Switch]$CheckMounted
+        [Parameter(Mandatory=$false)][Switch]$CheckMounted,
+        [Parameter(Mandatory=$false)][String]$ImageMatches,
+        [Parameter(Mandatory=$false)][String]$ImageNotMatches,
+        [Parameter(Mandatory=$false)][Switch]$OnlyIncremental,
+        [Parameter(Mandatory=$false)][Switch]$OnlyFull,
+        [Parameter(Mandatory=$false)][ValidateSet("Year","Month","Day")][String]$Range,
+        [Parameter(Mandatory=$false)]$Year = $Null,
+        [Parameter(Mandatory=$false)]$Month = $Null,
+        [Parameter(Mandatory=$false)]$Day = $Null,
+        [Parameter(Mandatory=$false)][Int]$AddDays = 0,
+        [Parameter(Mandatory=$false)][Int]$AddMonths = 0,
+        [Parameter(Mandatory=$false)][Int]$AddYears = 0
     )
+
+    $DateRangeParams = @{
+        Range = $Range
+        Year = $Year
+        Month = $Month
+        Day = $Day
+        AddDays = $AddDays
+        AddMonths = $AddMonths
+        AddYears = $AddYears
+    }
 
     $EventLogParams = @{
         Source = 'ShadowProtectSvc'
         LogName = 'Application'
     }
+
+    If($Range) {
+        $r = Get-DateRange @DateRangeParams
+        $StartDate = $r[0]
+        $EndDate = $r[1]
+    }
     
     If ($EndDate) { $EventLogParams['Before'] = $EndDate }
     If ($StartDate) { $EventLogParams['After'] = $StartDate }
     If ($ComputerName) { $EventLogParams['ComputerName'] = $ComputerName }
-	
-    Get-EventLog @EventLogParams| Where-Object { $_.EventID -in 1120..1122 } | Sort-Object -Property TimeGenerated | ForEach-Object {
+
+    $output = @()
+
+    Get-EventLog @EventLogParams | Where-Object { $_.EventID -in 1120..1122 } | Sort-Object -Property TimeGenerated | ForEach-Object {
         $bu = New-ShadowProtectBackupObject -EventLogEntry $_
-        Write-Output $bu
+        $output += $bu
     }
+
+    If($ImageMatches) {
+        $output = $output | Where-Object { ($_.ImageFile -match $ImageMatches) }
+    }
+
+    If($ImageNotMatches) {
+        $output = $output | Where-Object { ($_.ImageFile -notmatch $ImageNotMatches) }
+    }
+
+    If($OnlyIncremental) {
+        $output = $output | Where-Object { ($_.ImageFile -match '.spi$') }
+    }
+
+    If($OnlyFull) {
+        $output = $output | Where-Object { ($_.ImageFile -match '.spf$') }
+    }
+
+    Return $output
+}
+
+Function Use-ShadowProtectMountDriver {
+    $exe = Get-PathOfSPIMount
+    $driver = "C:\windows\system32\drivers\sbmount.sys"
+    &$exe l $driver | Out-Null
 }
 
 Function Mount-ShadowProtectImage {
     Param(
-        [string]$Password
+        [string]$Password,
+        [array]$ReplaceImageFile
     )
 
     If($Password) { $Password = "p=$Password" }
@@ -161,20 +257,30 @@ Function Mount-ShadowProtectImage {
 
         $next_drive = Get-AvailableDriveLetter
 
+        $use_imagefile = $bu.ImageFile -replace '-i\d+.spi$','.spf'
+        $use_imageincfile = $bu.ImageFile
+
+        If($ReplaceImageFile) {
+            $use_imagefile = $use_imagefile.Replace($ReplaceImageFile[0], "$($ReplaceImageFile[1]):")
+            $use_imageincfile = $use_imageincfile.Replace($ReplaceImageFile[0], "$($ReplaceImageFile[1]):")
+        }
+
         if($bu.IsIncremental) {
-            $full_image = $bu.ImageFile -replace '-i\d+.spi$','.spf'
-            &$exe s $full_image i=$full_image $bu.ImageFile d=$next_drive $Password
+            Write-Debug "Calling: $exe s $full_image i=$use_imageincfile $use_imagefile d=$next_drive $Password"
+            &$exe s $full_image i=$use_imageincfile $use_imagefile d=$next_drive $Password
         }
         else {
-            &$exe s $bu.ImageFile d=$next_drive $Password
+            Write-Debug "Calling: $exe s $use_imagefile d=$next_drive $Password"
+            &$exe s $use_imagefile d=$next_drive $Password
         }
+
         $mount_res = $LastExitCode
 
         If ($mount_res -eq 0) {
-            Write-Debug "Mounting $($bu.GetImage().Name) to $next_drive"
+            Write-Debug "Mounting $($bu.ImageFile.Split('\')[-1]) to $next_drive"
         }
         Else {
-            Write-Error "Unable to mount $($bu.GetImage().Name) to $next_drive"
+            Write-Error "Unable to mount $($bu.ImageFile.Split('\')[-1]) to $next_drive ($mount_res)"
         }
 
         $sw = [diagnostics.stopwatch]::StartNew()
@@ -185,9 +291,15 @@ Function Mount-ShadowProtectImage {
         }
 
         If (($mount_res -eq 0) -And $foundDrive) {
-            Write-Debug "Successfully mounted $($bu.GetImage().Name) to $next_drive"
+            New-PSDrive -Name $next_drive -PSProvider FileSystem -Root "${next_drive}:" | Out-Null
+            Write-Debug "Successfully mounted $($bu.ImageFile.Split('\')[-1]) to $next_drive"
             $bu.DriveLetter = "$($next_drive):"
             $bu.IsMounted = $True
+            $bu.SimpleLog += "- - Mounted image"
+        }
+
+        Else {
+            $bu.SimpleLog += "- - Failed to mount image"
         }
     }
 
@@ -201,7 +313,7 @@ Function Dismount-ShadowProtectImage {
         &$exe d $bu.DriveLetter
         If ($LASTEXITCODE -eq 0) {
             $bu.IsMounted = $False
-            $bu.SimpleLog += "- - $($bu.GetImage().BaseName) dismounted"
+            $bu.SimpleLog += "- - $($bu.ImageFile.Split('\')[-1]) dismounted"
         }
         Else {
             Write-Error "Command ($exe d $($bu.DriveLetter)) returned $LASTEXITCODE"
@@ -251,9 +363,33 @@ Function Get-ShadowProtectImageMounts {
     
     $current = $Null
     $save = $False
-
-    $mounts | Parse-Multiline | ForEach-Object {
-        New-ShadowProtectBackupObject -ImageFile $_.ImageFile.split('|')[-1] -MountData $_
+    ForEach($line in $mounts) {
+        If(!$line -And $save) {
+            Write-Output $current
+            $current = $Null
+            $save = $False
+        }
+        If($line) {
+            ForEach($key in $properties.KEYS.GetEnumerator()) {
+                If($current -eq $Null) {
+                    $current = New-ShadowProtectBackupObject -ImageFile 'Invalid!'
+                }
+                $matchText = "$($properties[$key]): "
+                If($line.IndexOf($matchText) -eq 0) {
+                    $val = ($line -replace $matchText,'').Trim()
+                    If($val -eq "TRUE") { $val = $True }
+                    If($val -eq "FALSE") { $val = $True }
+                    If($key -eq "ImageFile") { $val = $val.split('|')[-1] }
+                    If($val -eq "") { $val = $Null }
+                    If($key -eq "PartitionLength") {
+                        $val -match '(\d+) bytes?' | Out-Null
+                        $val = [long]($matches[1])
+                    }
+                    $current.($key) = $val
+                    $save = $true
+                }
+            }
+        }
     }
 }
 
@@ -261,11 +397,12 @@ Function Use-VerifyShadowProtectImage {
 	$exe = Get-PathOfSPImage
 
     ForEach($bu in $input) {
+        $temp_file = [System.IO.Path]::GetTempFileName()
         Write-Debug ("Verifying against {0}" -f $bu.Md5File)
         $bu.IsVerified = $False
-        &cmd.exe /U /C $exe v $bu.Md5File | out-file -Encoding ascii temp.txt
-        $contents = (Get-Content -Encoding unicode temp.txt) -replace "[^\u0020-\u007E]",""
-        remove-item -force temp.txt
+        &cmd.exe /U /C $exe v $bu.Md5File | out-file -Encoding ascii $temp_file
+        $contents = (Get-Content -Encoding unicode $temp_file) -replace "[^\u0020-\u007E]",""
+        Remove-Item -force $temp_file
         foreach($line in $contents) {
             If($line -match "SUCCESS") {
                 $bu.IsVerified = $True
@@ -282,8 +419,12 @@ Function Use-VerifyCopyShadowProtectImage {
         $MaxLength = 1024*1024*50, # 50MiB
         $MaxDirs = 5,
         $MaxFiles = 5,
-        $TempPath = $env:TEMP
+        $TempPath = "C:\RestoreTemp"
     )
+
+    If(!(Test-Path $TempPath)) {
+        New-Item -Type Directory -Path $TempPath | Out-Null
+    }
 
     Write-Debug "Looking for files between $MinLength and $MaxLength, will copy to $TempPath"
 
@@ -299,7 +440,7 @@ Function Use-VerifyCopyShadowProtectImage {
 
         If($bu.IsMounted -ne $False) {
             $prev_loc = Get-Location
-            New-PSDrive -Name $bu.DriveLetter[0] -PSProvider FileSystem -Root "$($bu.DriveLetter)\"
+            New-PSDrive -Name $bu.DriveLetter[0] -PSProvider FileSystem -Root $bu.DriveLetter
             Set-Location -Path $bu.DriveLetter -ErrorAction Stop
             $parents = Get-ChildItem $bu.DriveLetter -Filter *.* | Where-Object { $_.Name -notmatch '(Windows|PerfLogs)' } | Get-Random -Count $MaxDirs | Select -First $MaxDirs
 
@@ -316,17 +457,17 @@ Function Use-VerifyCopyShadowProtectImage {
             Foreach($TestFile in $items) {
                 $CopyToFile = "$TempPath\$($TestFile.Name)"
                 $CopyCount += 1
+                Write-Debug "Copying $TestFile to $CopyToFile"
                 try {
-                    Write-Debug "Copying $TestFile to $CopyToFile"
-                    Copy-Item $TestFile.FullName -Destination $CopyToFile -ErrorAction Stop
-                    Remove-Item $CopyToFile -ErrorAction SilentlyContinue | Out-Null
+                    Copy-Item $TestFile.FullName -Destination $CopyToFile -ErrorAction Stop -Force
                     $bu.SimpleLog += "- - - Successful Copy: $($TestFile.Name)"
                 }
                 catch {
-                    Remove-Item $CopyToFile -ErrorAction SilentlyContinue | Out-Null
-                    $ErrorCount += 1
                     $bu.SimpleLog += "- - - Unsuccessful Copy: $($TestFile.Name)"
+                    $bu.SimpleLog += "- - - - $($Error[0])"
+                    $ErrorCount += 1
                 }
+                Remove-Item $CopyToFile -ErrorAction SilentlyContinue | Out-Null
             }
 
             Set-Location $prev_loc 
@@ -385,6 +526,9 @@ Function Parse-Multiline {
     }
 }
 
+Export-ModuleMember -Function Use-ShadowProtectMountDriver
+Export-ModuleMember -Function Get-AvailableDriveLetter
+Export-ModuleMember -Function Get-DateRange
 Export-ModuleMember -Function Get-ShadowProtectBackupHistory
 Export-ModuleMember -Function Get-ShadowProtectImageFiles
 Export-ModuleMember -Function Get-ShadowProtectImageMounts
